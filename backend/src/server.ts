@@ -13,6 +13,7 @@ interface Room {
   presenter: WebSocket | null;
   master: WebSocket | null;
   players: PlayerData[];
+  fogSnapshot: string | null;
 }
 
 const wss = new WebSocketServer({ port: 8080 });
@@ -46,7 +47,12 @@ wss.on('connection', (ws: WebSocket) => {
 
     if (msg.type === 'create-room') {
       const roomId = uuidv4().slice(0, 6);
-      rooms.set(roomId, { presenter: ws, master: null, players: [] });
+      rooms.set(roomId, {
+        presenter: ws,
+        master: null,
+        players: [],
+        fogSnapshot: null,
+      });
       currentRoom = roomId;
       role = 'presenter';
 
@@ -67,6 +73,7 @@ wss.on('connection', (ws: WebSocket) => {
             type: 'joined-room',
             roomId,
             players: room.players,
+            fogSnapshot: room.fogSnapshot,
           }),
         );
 
@@ -108,6 +115,25 @@ wss.on('connection', (ws: WebSocket) => {
         room.players = room.players.filter((p) => p.id !== msg.playerId);
         broadcast(room, { type: 'player-deleted', playerId: msg.playerId });
         console.log(`Player deleted in room ${currentRoom}: ${msg.playerId}`);
+      }
+    }
+
+    if (msg.type === 'fog-reveal') {
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom)!;
+        // Forward reveal points to presenter
+        broadcast(room, { type: 'fog-reveal', points: msg.points }, ws);
+        console.log(
+          `Fog revealed in room ${currentRoom}: ${msg.points.length} points`,
+        );
+      }
+    }
+
+    if (msg.type === 'fog-snapshot') {
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom)!;
+        room.fogSnapshot = msg.data;
+        console.log(`Fog snapshot saved for room ${currentRoom}`);
       }
     }
   });

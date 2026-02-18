@@ -4,18 +4,32 @@ export const useWs = (url: string) => {
   const ws = ref<WebSocket | null>(null);
   const messageCallbacks: ((msg: any) => void)[] = [];
 
-  const connect = () => {
-    ws.value = new WebSocket(url);
+  const connect = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
 
-    ws.value.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      messageCallbacks.forEach((callback) => callback(msg));
-    };
+      socket.onopen = () => {
+        resolve();
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        messageCallbacks.forEach((callback) => callback(msg));
+      };
+
+      socket.onerror = (err) => {
+        reject(err);
+      };
+
+      ws.value = socket;
+    });
   };
 
   const send = (message: any) => {
     if (ws.value && ws.value.readyState === WebSocket.OPEN) {
       ws.value.send(JSON.stringify(message));
+    } else {
+      console.warn('WebSocket not open, cannot send:', message);
     }
   };
 
