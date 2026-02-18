@@ -7,17 +7,23 @@
       <button @click="joinRoom">Join as Master</button>
     </div>
 
-    <!-- Waiting for master (presenter view) -->
+    <!-- Presenter view: waiting for master -->
     <div
-      v-if="joined && !isMaster && role === 'presenter'"
+      v-if="joined && role === 'presenter' && !masterConnected"
       style="text-align: center; margin-top: 50px"
     >
-      <p>Room: {{ roomId }}</p>
+      <p>Room: {{ roomId }} (Presenter)</p>
       <p style="font-size: 18px; margin-top: 20px">⏳ Waiting for master...</p>
     </div>
 
-    <!-- Canvas & color button (master view) -->
-    <div v-if="joined && isMaster">
+    <!-- Presenter view: master connected, show canvas -->
+    <div v-if="joined && role === 'presenter' && masterConnected">
+      <p>Room: {{ roomId }} (Presenter)</p>
+      <div ref="stageContainer" id="stage"></div>
+    </div>
+
+    <!-- Master view: canvas & color button -->
+    <div v-if="joined && role === 'master'">
       <p>Room: {{ roomId }} (Master)</p>
       <div ref="stageContainer" id="stage"></div>
       <button @click="changeColor" style="margin-top: 10px">
@@ -28,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, nextTick } from 'vue';
 import Konva from 'konva';
 import { useWs } from '../composables/useWs';
 
@@ -36,8 +42,8 @@ import { useWs } from '../composables/useWs';
 const stageContainer = ref<HTMLDivElement>();
 const roomId = ref('');
 const joined = ref(false);
-const isMaster = ref(false);
 const role = ref<'presenter' | 'master' | null>(null);
+const masterConnected = ref(false);
 const joinInput = ref('');
 
 // ----- Konva elements -----
@@ -50,9 +56,12 @@ const WS_URL = 'ws://localhost:8080';
 const { ws, connect, send, onMessage } = useWs(WS_URL);
 
 // Initialize the stage and square
-const initStage = (color: string) => {
+const initStage = async (color: string) => {
+  await nextTick(); // wait for the DOM to update so stageContainer is available
+  if (!stageContainer.value) return;
+
   stage = new Konva.Stage({
-    container: stageContainer.value!,
+    container: stageContainer.value,
     width: 400,
     height: 400,
   });
@@ -78,11 +87,11 @@ onMessage((msg: any) => {
     roomId.value = msg.roomId;
     role.value = 'presenter';
     joined.value = true;
-    isMaster.value = false;
   }
 
   if (msg.type === 'master-joined') {
-    isMaster.value = true;
+    // Presenter receives this: master has connected, show the canvas
+    masterConnected.value = true;
     initStage('#ff0000');
   }
 
@@ -90,12 +99,11 @@ onMessage((msg: any) => {
     roomId.value = msg.roomId;
     role.value = 'master';
     joined.value = true;
-    isMaster.value = true;
     initStage(msg.squareColor || '#ff0000');
   }
 
   if (msg.type === 'square-color-changed') {
-    if (isMaster.value && square) {
+    if (square) {
       square.fill(msg.color);
       layer.draw();
     }
@@ -115,7 +123,11 @@ const joinRoom = () => {
 };
 
 const changeColor = () => {
-  const color = '#' + Math.floor(Math.random() * 16777215).toString(16);
+  const color =
+    '#' +
+    Math.floor(Math.random() * 16777215)
+      .toString(16)
+      .padStart(6, '0');
   send({ type: 'update-square-color', color });
 };
 </script>
