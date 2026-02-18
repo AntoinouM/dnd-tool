@@ -1,14 +1,40 @@
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 
+interface PlayerData {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  color: string;
+}
+
 interface Room {
   presenter: WebSocket | null;
   master: WebSocket | null;
-  color: string;
+  players: PlayerData[];
 }
 
 const wss = new WebSocketServer({ port: 8080 });
 const rooms = new Map<string, Room>();
+
+function broadcast(room: Room, message: object, exclude?: WebSocket) {
+  const data = JSON.stringify(message);
+  if (
+    room.presenter &&
+    room.presenter.readyState === WebSocket.OPEN &&
+    room.presenter !== exclude
+  ) {
+    room.presenter.send(data);
+  }
+  if (
+    room.master &&
+    room.master.readyState === WebSocket.OPEN &&
+    room.master !== exclude
+  ) {
+    room.master.send(data);
+  }
+}
 
 wss.on('connection', (ws: WebSocket) => {
   console.log('Client connected.');
@@ -20,7 +46,7 @@ wss.on('connection', (ws: WebSocket) => {
 
     if (msg.type === 'create-room') {
       const roomId = uuidv4().slice(0, 6);
-      rooms.set(roomId, { presenter: ws, master: null, color: '#ff0000' });
+      rooms.set(roomId, { presenter: ws, master: null, players: [] });
       currentRoom = roomId;
       role = 'presenter';
 
@@ -40,7 +66,7 @@ wss.on('connection', (ws: WebSocket) => {
           JSON.stringify({
             type: 'joined-room',
             roomId,
-            squareColor: room.color,
+            players: room.players,
           }),
         );
 
@@ -53,22 +79,35 @@ wss.on('connection', (ws: WebSocket) => {
       }
     }
 
-    if (msg.type === 'update-square-color') {
+    if (msg.type === 'add-player') {
       if (currentRoom && rooms.has(currentRoom)) {
         const room = rooms.get(currentRoom)!;
-        room.color = msg.color;
+        const player: PlayerData = msg.player;
+        room.players.push(player);
+        broadcast(room, { type: 'player-added', player });
+        console.log(`Player added in room ${currentRoom}: ${player.name}`);
+      }
+    }
 
-        if (room.presenter && room.presenter.readyState === WebSocket.OPEN) {
-          room.presenter.send(
-            JSON.stringify({ type: 'square-color-changed', color: msg.color }),
-          );
+    if (msg.type === 'update-player') {
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom)!;
+        const updated: PlayerData = msg.player;
+        const idx = room.players.findIndex((p) => p.id === updated.id);
+        if (idx !== -1) {
+          room.players[idx] = updated;
         }
-        if (room.master && room.master.readyState === WebSocket.OPEN) {
-          room.master.send(
-            JSON.stringify({ type: 'square-color-changed', color: msg.color }),
-          );
-        }
-        console.log(`Color updated in room ${currentRoom}: ${msg.color}`);
+        broadcast(room, { type: 'player-updated', player: updated }, ws);
+        console.log(`Player updated in room ${currentRoom}: ${updated.name}`);
+      }
+    }
+
+    if (msg.type === 'delete-player') {
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom)!;
+        room.players = room.players.filter((p) => p.id !== msg.playerId);
+        broadcast(room, { type: 'player-deleted', playerId: msg.playerId });
+        console.log(`Player deleted in room ${currentRoom}: ${msg.playerId}`);
       }
     }
   });
@@ -77,12 +116,19 @@ wss.on('connection', (ws: WebSocket) => {
     if (currentRoom && rooms.has(currentRoom)) {
       const room = rooms.get(currentRoom)!;
       if (role === 'presenter') {
+        if (room.master && room.master.readyState === WebSocket.OPEN) {
+          room.master.send(JSON.stringify({ type: 'presenter-disconnected' }));
+        }
         room.presenter = null;
       } else if (role === 'master') {
+        if (room.presenter && room.presenter.readyState === WebSocket.OPEN) {
+          room.presenter.send(JSON.stringify({ type: 'master-disconnected' }));
+        }
         room.master = null;
       }
       if (!room.presenter && !room.master) {
         rooms.delete(currentRoom);
+        console.log(`Room ${currentRoom} deleted (empty).`);
       }
     }
     console.log('Client disconnected.');
